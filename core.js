@@ -1,5 +1,5 @@
 /* Local archive storage. No network access and no dynamic code execution. */
-const RELEASE = '1.2.0';
+const RELEASE = '1.2.1';
 const MIB = 1024 * 1024, MAX_FILE = 100 * MIB, MAX_BACKUP = 512 * MIB;
 const ROOTS = [{id:'admin',name:'الإدارة',parent:null},{id:'technical',name:'الفنية',parent:null}];
 const MIME = {pdf:'application/pdf',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',tif:'image/tiff',tiff:'image/tiff',doc:'application/msword',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xls:'application/vnd.ms-excel',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',dwg:'application/octet-stream',dxf:'application/octet-stream'};

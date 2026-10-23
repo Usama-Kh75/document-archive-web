@@ -1,7 +1,7 @@
 'use strict';
 const CACHE_PREFIX='document-archive-web:'+new URL(self.registration.scope).pathname+':';
-const CACHE=CACHE_PREFIX+'1.2.0';
-const ASSETS=['./','./index.html','./app.js','./core.js','./style.css','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
+const CACHE=CACHE_PREFIX+'1.2.1';
+const ASSETS=['./','./index.html','./app.js','./core.js','./style.css','./manifest.webmanifest','./icon-192.png','./icon-512.png','./icon-maskable-512.png'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS))));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith(CACHE_PREFIX)&&key!==CACHE).map(key=>caches.delete(key))))));
 self.addEventListener('fetch',event=>{
