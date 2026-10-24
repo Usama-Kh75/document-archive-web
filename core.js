@@ -1,6 +1,6 @@
 /* Local archive storage. No network access and no dynamic code execution. */
-const RELEASE = '1.2.2';
-const MIB = 1024 * 1024, MAX_FILE = 100 * MIB, MAX_BACKUP = 512 * MIB;
+const RELEASE = '1.2.4';
+const MIB = 1024 * 1024, MAX_FILE = 100 * MIB, MAX_BACKUP = 512 * MIB, MAX_DOCS = 10000, MAX_CATEGORIES = 2000;
 const ROOTS = [{id:'admin',name:'الإدارة',parent:null},{id:'technical',name:'الفنية',parent:null}];
 const MIME = {pdf:'application/pdf',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',tif:'image/tiff',tiff:'image/tiff',doc:'application/msword',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xls:'application/vnd.ms-excel',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',dwg:'application/octet-stream',dxf:'application/octet-stream'};
 const fail = message => { throw new Error(message); };
@@ -49,19 +49,22 @@ async function validateFile(blob,name) {
 async function addDocument(file,input) {
   const ext=await validateFile(file,file.name), info=metadata(input), sha256=await hash(file);
   const tx=database.transaction(['documents','files','categories'],'readwrite'), completion=done(tx);
-  const docs=tx.objectStore('documents');let result;
+  const docs=tx.objectStore('documents');let result,error;
   const cat=tx.objectStore('categories').get(info.category);
   cat.onsuccess=()=>{
     if(!cat.result){tx.abort();return;}
     const check=docs.index('sha256').get(sha256);
     check.onsuccess=()=>{
       if(check.result){result={duplicate:check.result};return;}
-      const id=crypto.randomUUID(), now=new Date().toISOString();
-      const doc={...info,id,name:file.name,ext,size:file.size,sha256,created:now,updated:now,trashed:false};
-      docs.add(doc);tx.objectStore('files').add({id,blob:file.slice(0,file.size,MIME[ext])});result={document:doc};
+      const count=docs.count();count.onsuccess=()=>{
+        if(count.result>=MAX_DOCS){error='بلغ الأرشيف حده الأقصى: 10000 مستند، بما فيها السلة.';tx.abort();return;}
+        const id=crypto.randomUUID(), now=new Date().toISOString();
+        const doc={...info,id,name:file.name,ext,size:file.size,sha256,created:now,updated:now,trashed:false};
+        docs.add(doc);tx.objectStore('files').add({id,blob:file.slice(0,file.size,MIME[ext])});result={document:doc};
+      };
     };
   };
-  await completion;return result;
+  try{await completion;}catch(e){throw new Error(error||e.message);}return result;
 }
 async function editDocument(id,input,trash) {
   const info=input?metadata(input):null;
@@ -76,6 +79,7 @@ async function addCategory(name,parent) {
   name=cleanText(name,150,true);
   const tx=database.transaction('categories','readwrite'), completion=done(tx), store=tx.objectStore('categories');let error;
   const read=store.getAll();read.onsuccess=()=>{
+    if(read.result.length>=MAX_CATEGORIES){error='بلغت التصنيفات حدها الأقصى: 2000 تصنيف.';tx.abort();return;}
     if(!read.result.some(c=>c.id===parent)||read.result.some(c=>c.parent===parent&&normalize(c.name)===normalize(name))) {error='التصنيف موجود أو التصنيف الأب غير صالح.';tx.abort();return;}
     store.add({id:crypto.randomUUID(),name,parent});
   };try{await completion;}catch(e){throw new Error(error||e.message);}
@@ -99,6 +103,7 @@ async function snapshot() {
 }
 async function exportArchive() {
   const {documents,files,categories}=await snapshot(), map=new Map(files.map(f=>[f.id,f.blob])),parts=[];
+  if(documents.length>MAX_DOCS||categories.length>MAX_CATEGORIES) fail('الأرشيف يتجاوز حد النسخة الاحتياطية (10000 مستند و2000 تصنيف)، فلن تُستعاد نسخته.');
   if(documents.reduce((n,d)=>n+d.size,0)>MAX_BACKUP-8*MIB) fail('الأرشيف يتجاوز حد التصدير لهذه النسخة (512 MiB).');
   for(const d of documents){const blob=map.get(d.id);if(!blob||blob.size!==d.size||await hash(blob)!==d.sha256)fail('تعذّر فحص أحد الأصول. لم تُنشأ نسخة ناقصة.');parts.push(blob);}
   const header=new TextEncoder().encode(JSON.stringify({format:'document-archive',schema:1,version:RELEASE,categories,documents}));
@@ -113,7 +118,7 @@ async function parseBackup(file) {
   if(new TextDecoder().decode(prefix.slice(0,8))!=='ARCHIVE1')fail('اختر نسخة .archive من نسخة HTML. نسخ Windows ZIP ليست متوافقة معها.');
   const length=new DataView(prefix).getUint32(8,true);if(length>8*MIB||length+12>file.size)fail('رأس النسخة غير صالح.');
   let data;try{data=JSON.parse(await file.slice(12,12+length).text());}catch{fail('بيانات النسخة غير قابلة للقراءة.');}
-  if(data?.format!=='document-archive'||data.schema!==1||!Array.isArray(data.documents)||!Array.isArray(data.categories)||data.documents.length>10000||data.categories.length>2000)fail('صيغة النسخة غير مدعومة.');
+  if(data?.format!=='document-archive'||data.schema!==1||!Array.isArray(data.documents)||!Array.isArray(data.categories)||data.documents.length>MAX_DOCS||data.categories.length>MAX_CATEGORIES)fail('صيغة النسخة غير مدعومة.');
   const ids=new Set(), hashes=new Set(),cats=[];
   for(const c of data.categories){if(!c||typeof c!=='object')fail('تصنيف غير صالح.');const clean={id:cleanText(c.id,100,true),name:cleanText(c.name,150,true),parent:c.parent===null?null:cleanText(c.parent,100,true)};if(ids.has(clean.id))fail('تصنيف مكرر.');ids.add(clean.id);cats.push(clean);}
   for(const root of ROOTS)if(!cats.some(c=>c.id===root.id&&c.name===root.name&&c.parent===null))fail('التصنيفات الرئيسية غير صالحة.');
@@ -132,14 +137,16 @@ async function parseBackup(file) {
 }
 async function restoreArchive(data) {
   // All validation occurs before entering this single, atomic merge transaction.
-  const tx=database.transaction(['documents','files','categories'],'readwrite'), completion=done(tx);let added=0,skipped=0;
+  const tx=database.transaction(['documents','files','categories'],'readwrite'), completion=done(tx);let added=0,skipped=0,error;
   const categoryRead=tx.objectStore('categories').getAll();categoryRead.onsuccess=()=>{
     const cats=categoryRead.result, mapping=new Map(ROOTS.map(c=>[c.id,c.id]));
     const pending=data.categories.filter(c=>!mapping.has(c.id));
     while(pending.length){let progress=false;for(let i=pending.length-1;i>=0;i--){const c=pending[i];if(!mapping.has(c.parent))continue;const parent=mapping.get(c.parent);let target=cats.find(x=>x.parent===parent&&normalize(x.name)===normalize(c.name));if(!target){target={id:crypto.randomUUID(),name:c.name,parent};cats.push(target);tx.objectStore('categories').add(target);}mapping.set(c.id,target.id);pending.splice(i,1);progress=true;}if(!progress){tx.abort();return;}}
+    if(cats.length>MAX_CATEGORIES){error='الدمج يتجاوز حد 2000 تصنيف. لم يُستعد شيء.';tx.abort();return;}
     const read=tx.objectStore('documents').getAll();read.onsuccess=()=>{
       const hashes=new Set(read.result.map(d=>d.sha256)),files=new Map(data.files.map(f=>[f.id,f.blob]));
       for(const d of data.documents){if(hashes.has(d.sha256)){skipped++;continue;}const id=crypto.randomUUID();tx.objectStore('documents').add({...d,id,category:mapping.get(d.category)});tx.objectStore('files').add({id,blob:files.get(d.id)});hashes.add(d.sha256);added++;}
+      if(hashes.size>MAX_DOCS){error='الدمج يتجاوز حد 10000 مستند، بما فيها السلة. لم يُستعد شيء.';tx.abort();}
     };
-  };await completion;return {added,skipped};
+  };try{await completion;}catch(e){throw new Error(error||e.message);}return {added,skipped};
 }
